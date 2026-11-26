@@ -1160,6 +1160,116 @@ public class TestRewriteValve extends TomcatBaseTest {
     }
 
 
+    @Test
+    public void testOrCondDoesNotSkipNonOrCond() throws Exception {
+        Tomcat tomcat = getTomcatInstance();
+
+        Context ctx = getProgrammaticRootContext();
+
+        RewriteValve rewriteValve = new RewriteValve();
+        ctx.getPipeline().addValve(rewriteValve);
+
+        rewriteValve.setConfiguration(
+                "RewriteCond %{HTTP_HOST} localhost [OR]\n" +
+                        "RewriteCond %{HTTP_HOST} 127.0.0.1\n" +
+                        "RewriteCond %{REQUEST_URI} ^/admin\n" +
+                "RewriteRule ^(.*) /blocked$1 [R]");
+
+        Tomcat.addServlet(ctx, "snoop", new SnoopServlet());
+        ctx.addServletMappingDecoded("/other", "snoop");
+
+        tomcat.start();
+
+        ByteChunk res = new ByteChunk();
+        int rc = getUrl("http://localhost:" + getPort() + "/other", res, false);
+
+        Assert.assertEquals(HttpServletResponse.SC_OK, rc);
+
+        res.setCharset(StandardCharsets.UTF_8);
+        String body = res.toString();
+        Assert.assertTrue(body, body.contains("REQUEST-URI: /other"));
+    }
+
+
+    /*
+     * A group of conditions joined with [OR] is a single term that has to be combined (AND) with the conditions that
+     * follow the group.
+     */
+    @Test
+    public void testOrCondSecondMatchDoesNotSkipNonOrCond() throws Exception {
+        // (false OR true) AND false
+        doTestOrCond("RewriteCond %{HTTP_HOST} 127.0.0.1 [OR]\n" + "RewriteCond %{HTTP_HOST} localhost\n" +
+                "RewriteCond %{REQUEST_URI} ^/admin\n", "/other", HttpServletResponse.SC_OK);
+    }
+
+
+    @Test
+    public void testMultipleOrCondDoesNotSkipNonOrCond() throws Exception {
+        // (true OR false OR false) AND false
+        doTestOrCond("RewriteCond %{HTTP_HOST} localhost [OR]\n" + "RewriteCond %{HTTP_HOST} 127.0.0.1 [OR]\n" +
+                "RewriteCond %{HTTP_HOST} example.org\n" + "RewriteCond %{REQUEST_URI} ^/admin\n", "/other",
+                HttpServletResponse.SC_OK);
+    }
+
+
+    @Test
+    public void testOrCondNoMatchNotOverriddenByNonOrCond() throws Exception {
+        // (false OR false) AND true
+        doTestOrCond("RewriteCond %{HTTP_HOST} 127.0.0.1 [OR]\n" + "RewriteCond %{HTTP_HOST} example.org\n" +
+                "RewriteCond %{REQUEST_URI} ^/other\n", "/other", HttpServletResponse.SC_OK);
+    }
+
+
+    @Test
+    public void testOrCondFirstMatchAndNonOrCondMatch() throws Exception {
+        // (true OR false) AND true
+        doTestOrCond("RewriteCond %{HTTP_HOST} localhost [OR]\n" + "RewriteCond %{HTTP_HOST} 127.0.0.1\n" +
+                "RewriteCond %{REQUEST_URI} ^/admin\n", "/admin", HttpServletResponse.SC_FOUND);
+    }
+
+
+    @Test
+    public void testOrCondSecondMatchAndNonOrCondMatch() throws Exception {
+        // (false OR true) AND true
+        doTestOrCond("RewriteCond %{HTTP_HOST} 127.0.0.1 [OR]\n" + "RewriteCond %{HTTP_HOST} localhost\n" +
+                "RewriteCond %{REQUEST_URI} ^/admin\n", "/admin", HttpServletResponse.SC_FOUND);
+    }
+
+
+    private void doTestOrCond(String conditions, String uri, int expectedRc) throws Exception {
+        Tomcat tomcat = getTomcatInstance();
+
+        Context ctx = getProgrammaticRootContext();
+
+        RewriteValve rewriteValve = new RewriteValve();
+        ctx.getPipeline().addValve(rewriteValve);
+
+        rewriteValve.setConfiguration(conditions + "RewriteRule ^(.*) /blocked$1 [R]");
+
+        Tomcat.addServlet(ctx, "snoop", new SnoopServlet());
+        ctx.addServletMappingDecoded("/*", "snoop");
+
+        tomcat.start();
+
+        ByteChunk res = new ByteChunk();
+        Map<String, List<String>> resHead = new HashMap<>();
+        int rc = methodUrl("http://localhost:" + getPort() + uri, res, DEFAULT_CLIENT_TIMEOUT_MS, null, resHead, "GET",
+                false);
+
+        res.setCharset(StandardCharsets.UTF_8);
+        String body = res.toString();
+        Assert.assertEquals(body, expectedRc, rc);
+        if (expectedRc == HttpServletResponse.SC_OK) {
+            Assert.assertTrue(body, body.contains("REQUEST-URI: " + uri));
+        } else {
+            List<String> locations = resHead.get("Location");
+            Assert.assertNotNull(locations);
+            Assert.assertEquals(1, locations.size());
+            Assert.assertTrue(locations.get(0), locations.get(0).endsWith("/blocked" + uri));
+        }
+    }
+
+
     public static class AttackerSessionIdValve extends ValveBase {
 
         static final String ATTACKER_SESSION_ID = "ATTACKERPROVIDEDSESSIONID";
