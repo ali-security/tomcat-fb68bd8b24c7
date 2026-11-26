@@ -17,6 +17,7 @@
 package org.apache.coyote.http2;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -62,6 +63,59 @@ public class TestHttp2Section_3_5 extends Http2TestBase {
             // This is expected on some platforms and depends on timing. Once
             // the server closes the connection the client may see an exception
             // when trying to read the GOAWAY frame.
+        }
+    }
+
+
+    @Test
+    public void testConnectionPrefaceFollowedByOversizedNonSettingsFrame() throws Exception {
+        enableHttp2();
+        configureAndStartWebApplication();
+        // Don't auto-acknowledge the server settings else the acknowledgement will be sent before the client preface
+        openClientConnection();
+        doHttpUpgrade();
+
+        /*
+         * Valid client preface start but followed by a frame that is not a SETTINGS frame (a stream error) and is
+         * larger than the maximum frame size (a connection error). The connection error must take priority.
+         * Previously, the stream error masked the connection error and the server attempted to read a payload that
+         * could never fit in the buffer provided, entering an endless read loop.
+         */
+        int payloadSize = ConnectionSettingsBase.DEFAULT_MAX_FRAME_SIZE + 1;
+        byte[] frameHeader = new byte[9];
+        // Length
+        ByteUtil.setThreeBytes(frameHeader, 0, payloadSize);
+        // Type
+        frameHeader[3] = FrameType.PING.getIdByte();
+        // No flags
+        // Stream 0
+
+        os.write(Http2Parser.CLIENT_PREFACE_START);
+        os.write(frameHeader);
+        // Send enough of the payload to completely fill the buffer the server uses to read the payload
+        os.write(new byte[ConnectionSettingsBase.DEFAULT_MAX_FRAME_SIZE]);
+        os.flush();
+
+        // Server settings
+        parser.readFrame();
+        Assert.assertEquals("0-Settings-[3]-[200]\n" + "0-Settings-End\n", output.getTrace());
+        output.clearTrace();
+
+        if (useAsyncIO) {
+            // The connection error is reported via a GOAWAY frame
+            handleGoAwayResponse(1);
+            // The error must be triggered by the frame size, not the frame type
+            Assert.assertTrue(output.getTrace(), output.getTrace().contains("[" + payloadSize + "]"));
+        } else {
+            // The server closes the connection. It must not wait for the remainder of the oversized payload.
+            try {
+                parser.readFrame();
+                Assert.assertTrue(output.getTrace(), output.getTrace().startsWith("0-Goaway-[1]-["));
+            } catch (SocketTimeoutException ste) {
+                Assert.fail("Server did not close the connection after receiving an oversized frame");
+            } catch (IOException ioe) {
+                // Expected. The server closed the connection.
+            }
         }
     }
 }
