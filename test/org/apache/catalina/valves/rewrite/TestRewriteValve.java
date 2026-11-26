@@ -91,6 +91,60 @@ public class TestRewriteValve extends TomcatBaseTest {
         doTestRewrite("RewriteRule ^/b/(.*) /b/../a/$1", "/b/%255A", "/b/../a/%255A");
     }
 
+    @Test
+    public void testChainMatch() throws Exception {
+        // The first rule matches so the chained (second) rule is applied to the result
+        doTestRewrite("RewriteRule ^/a(.*) /b$1 [C]\n" +
+                "RewriteRule ^/b(.*) /c$1", "/a/x", "/c/x");
+    }
+
+    @Test
+    public void testChainHeadNoMatch() throws Exception {
+        // The first rule does not match so the whole chain, including the
+        // terminal rule that would otherwise match, must be skipped. If the
+        // terminal rule were incorrectly applied the request would be rewritten
+        // to /W/x.
+        doTestRewrite("RewriteRule ^/never(.*) /c$1 [C]\n" +
+                "RewriteRule ^/c(.*) /W$1", "/c/x", "/c/x");
+    }
+
+    @Test
+    public void testChainMiddleNoMatch() throws Exception {
+        // The first rule matches but the second (chained) rule does not, so the
+        // rest of the chain, including the terminal rule, must be skipped and
+        // the result of the first rule is retained. If the terminal rule were
+        // incorrectly applied the request would be rewritten to /W/y.
+        doTestRewrite("RewriteRule ^/a(.*) /c$1 [C]\n" +
+                "RewriteRule ^/nomatch(.*) /x$1 [C]\n" +
+                "RewriteRule ^/c(.*) /W$1", "/a/y", "/c/y");
+    }
+
+    @Test
+    public void testChainHeadNoMatchUnterminated() throws Exception {
+        // Every rule in the chain has the chain flag. The first rule does not
+        // match so the remaining chained rules must be skipped.
+        doTestRewrite("RewriteRule ^/never(.*) /c$1 [C]\n" +
+                "RewriteRule ^/c(.*) /W$1 [C]", "/c/x", "/c/x");
+    }
+
+    @Test
+    public void testChainMiddleNoMatchUnterminated() throws Exception {
+        // Every rule in the chain has the chain flag. The second rule does not
+        // match so the remaining chained rules must be skipped.
+        doTestRewrite("RewriteRule ^/a(.*) /c$1 [C]\n" +
+                "RewriteRule ^/nomatch(.*) /x$1 [C]\n" +
+                "RewriteRule ^/c(.*) /W$1 [C]", "/a/y", "/c/y");
+    }
+
+    @Test
+    public void testNextRestartsAtFirstRule() throws Exception {
+        // The [N] flag must restart processing from the first rule. The first
+        // rule only matches the output of the second rule so, if the first rule
+        // were skipped on restart, the request would remain at /W/x.
+        doTestRewrite("RewriteRule ^/W/(.*) /c/$1\n" +
+                "RewriteRule ^/a/(.*) /W/$1 [N]", "/a/x", "/c/x");
+    }
+
     // BZ 57863
     @Test
     public void testRewriteMap01() throws Exception {
@@ -317,6 +371,13 @@ public class TestRewriteValve extends TomcatBaseTest {
     @Test
     public void testQueryStringRemove02() throws Exception {
         doTestRewrite("RewriteRule ^/b/(.*) /c/$1 [QSD]", "/b/d?=1", "/c/d", null);
+    }
+
+    @Test
+    public void testQueryStringRemoveWithAppend() throws Exception {
+        // [QSD] takes precedence over [QSA] so the original query string must
+        // not be appended to the rewritten one.
+        doTestRewrite("RewriteRule ^/b/(.*) /c/$1?id=1 [QSA,QSD]", "/b/d?foo=bar", "/c/d", "id=1");
     }
 
     @Test
