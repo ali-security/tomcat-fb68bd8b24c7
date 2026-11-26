@@ -212,8 +212,9 @@ public class LoadBalancerDrainingValve extends ValveBase {
             String uri = request.getRequestURI();
             String sessionURIParamName = SessionConfig.getSessionUriParamName(request.getContext());
             if (uri.contains(";" + sessionURIParamName + "=")) {
-                uri = uri.replaceFirst(";" + sessionURIParamName + "=[^&?]*", "");
+                uri = uri.replaceFirst(";" + sessionURIParamName + "=[^;/]*", "");
             }
+            uri = collapseLeadingSlashes(uri);
 
             String queryString = request.getQueryString();
 
@@ -228,5 +229,28 @@ public class LoadBalancerDrainingValve extends ValveBase {
         } else {
             getNext().invoke(request, response);
         }
+    }
+
+    private static String collapseLeadingSlashes(String s) {
+        final int len = s.length();
+        int i = 0;
+
+        // Find the last consecutive / character
+        while (i < len && s.charAt(i) == '/') {
+            i++;
+        }
+
+        // No leading slashes
+        if (i == 0) {
+            return s;
+        }
+
+        // Nothing but slashes
+        if (i == len) {
+            return "/";
+        }
+
+        // Multiple; remove all but one
+        return s.substring(i - 1);
     }
 }
