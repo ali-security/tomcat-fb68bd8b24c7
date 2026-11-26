@@ -218,6 +218,17 @@ public abstract class AbstractEndpoint<S,U> {
 
     // ----------------------------------------------------------------- Properties
 
+    private boolean strictSni = true;
+
+    public boolean getStrictSni() {
+        return strictSni;
+    }
+
+    public void setStrictSni(boolean strictSni) {
+        this.strictSni = strictSni;
+    }
+
+
     private String defaultSSLHostConfigName = SSLHostConfig.DEFAULT_SSL_HOST_NAME;
     /**
      * @return The host name for the default SSL configuration for this endpoint
@@ -504,6 +515,32 @@ public abstract class AbstractEndpoint<S,U> {
             throw new IllegalStateException();
         }
         return result;
+    }
+
+
+    /**
+     * Check if two host names share the same SSLHostConfig.
+     *
+     * @param sniHostName the host name from SNI, null if SNI is not in use
+     * @param protocolHostName the host name from the protocol
+     * @return true if SNI is not checked, if the SNI host name matches the protocol host name,
+     *    if both host names use the same SSLHostConfig configuration, if there is no SNI and the
+     *    protocol host name uses the default SSLHostConfig configuration, and false otherwise
+     */
+    public boolean checkSni(String sniHostName, String protocolHostName) {
+        if (protocolHostName != null && protocolHostName.endsWith(".")) {
+            protocolHostName = protocolHostName.substring(0, protocolHostName.length() - 1);
+        }
+        /*
+         * String.toLowerCase(Locale.ENGLISH) has slightly different behaviour to String.equalsIgnoreCase(String) so for
+         * consistency convert both host names to lower case first.
+         */
+        String lcProtocolHostName = protocolHostName != null ? protocolHostName.toLowerCase(Locale.ENGLISH) : null;
+        String lcSniHostName = sniHostName != null ? sniHostName.toLowerCase(Locale.ENGLISH) : null;
+
+        return (!strictSni || !isSSLEnabled()
+                || (lcSniHostName != null && lcSniHostName.equals(lcProtocolHostName))
+                || getSSLHostConfig(lcSniHostName) == getSSLHostConfig(lcProtocolHostName));
     }
 
 
