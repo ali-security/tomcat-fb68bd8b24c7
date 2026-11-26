@@ -540,22 +540,29 @@ public class RewriteValve extends ValveBase {
 
                     // Step 3. Complete the 2nd stage to encoding.
                     chunk.append(REWRITE_DEFAULT_ENCODER.encode(urlStringRewriteEncoded, uriCharset));
-                    // Decoded and normalized URI
-                    // Rewriting may have denormalized the URL
-                    urlStringRewriteEncoded = RequestUtil.normalize(urlStringRewriteEncoded);
+                    // Rewriting may have denormalized the URL and added encoded characters
+                    // Decode then normalize
+                    String urlStringRewriteDecoded = URLDecoder.decode(urlStringRewriteEncoded, uriCharset);
+                    urlStringRewriteDecoded = RequestUtil.normalize(urlStringRewriteDecoded);
                     request.getCoyoteRequest().decodedURI().setChars(MessageBytes.EMPTY_CHAR_ARRAY, 0, 0);
                     chunk = request.getCoyoteRequest().decodedURI().getCharChunk();
                     if (context) {
                         // This is decoded and normalized
                         chunk.append(request.getServletContext().getContextPath());
                     }
-                    chunk.append(URLDecoder.decode(urlStringRewriteEncoded, uriCharset));
-                    // Set the new Query if there is one
-                    if (queryStringRewriteEncoded != null) {
+                    chunk.append(urlStringRewriteDecoded);
+                    // Set the new Query String
+                    if (queryStringRewriteEncoded == null) {
+                        // No new query string. Therefore the original is retained unless QSD is defined.
+                        if (qsd) {
+                            request.getCoyoteRequest().queryString().setChars(MessageBytes.EMPTY_CHAR_ARRAY, 0, 0);
+                        }
+                    } else {
+                        // New query string. Therefore the original is dropped unless QSA is defined (and QSD is not).
                         request.getCoyoteRequest().queryString().setChars(MessageBytes.EMPTY_CHAR_ARRAY, 0, 0);
                         chunk = request.getCoyoteRequest().queryString().getCharChunk();
                         chunk.append(REWRITE_QUERY_ENCODER.encode(queryStringRewriteEncoded, uriCharset));
-                        if (!qsd && qsa && originalQueryStringEncoded != null && originalQueryStringEncoded.length() > 0) {
+                        if (qsa && originalQueryStringEncoded != null && originalQueryStringEncoded.length() > 0) {
                             chunk.append('&');
                             chunk.append(originalQueryStringEncoded);
                         }
@@ -651,6 +658,10 @@ public class RewriteValve extends ValveBase {
                     StringTokenizer flagsTokenizer = new StringTokenizer(flags, ",");
                     while (flagsTokenizer.hasMoreElements()) {
                         parseRuleFlag(line, rule, flagsTokenizer.nextToken());
+                    }
+                    // If QSD and QSA are present, QSD always takes precedence
+                    if (rule.isQsdiscard()) {
+                        rule.setQsappend(false);
                     }
                 }
                 return rule;
